@@ -61,23 +61,25 @@ const DEVICES: usize = PADS + 2;
 const HISTORY: usize = 32;
 const POLL: Duration = Duration::from_millis(8);
 
-/// The keyboard's stand-in gamepad (virtual key, button); README lists it.
-/// Sticks: W/A/S/D left, I/J/K/L right; triggers Z and C.
-const FALLBACK_BUTTONS: [(u8, u32); 14] = [
-    (0x1B, MENU), // Esc
-    (0x09, VIEW), // Tab
-    (0x0D, A),    // Enter
-    (0x08, B),    // Backspace
-    (b'X', X),
-    (b'Y', Y),
-    (0x26, UP), // arrows
-    (0x28, DOWN),
-    (0x25, LEFT),
-    (0x27, RIGHT),
-    (b'Q', LEFT_SHOULDER),
-    (b'E', RIGHT_SHOULDER),
-    (b'F', LEFT_STICK),
-    (b'H', RIGHT_STICK),
+/// The keyboard's stand-in gamepad (scan code, button); README lists it.
+/// Scan codes are physical keys, so the layout picks the letters: Z/Q/S/D
+/// where QWERTY has W/A/S/D. Sticks: W/A/S/D left, I/J/K/L right; triggers
+/// Z and C.
+const FALLBACK_BUTTONS: [(u32, u32); 14] = [
+    (0x01, MENU),  // Esc
+    (0x0F, VIEW),  // Tab
+    (0x1C, A),     // Enter
+    (0x0E, B),     // Backspace
+    (0x2D, X),     // X
+    (0x15, Y),     // Y
+    (0xE0_48, UP), // arrows
+    (0xE0_50, DOWN),
+    (0xE0_4B, LEFT),
+    (0xE0_4D, RIGHT),
+    (0x10, LEFT_SHOULDER),  // Q
+    (0x12, RIGHT_SHOULDER), // E
+    (0x21, LEFT_STICK),     // F
+    (0x23, RIGHT_STICK),    // H
 ];
 
 /// A gamepad reading: triggers 0 to 1, sticks -1 to 1 (up positive).
@@ -116,8 +118,8 @@ trait Source: Send {
 }
 
 fn fallback(keys: &[KeyState]) -> PadState {
-    let on = |vk: u8| {
-        if keys.iter().any(|k| k.virtual_key == vk) {
+    let on = |scan_code: u32| {
+        if keys.iter().any(|k| k.scan_code == scan_code) {
             1.0
         } else {
             0.0
@@ -126,14 +128,14 @@ fn fallback(keys: &[KeyState]) -> PadState {
     PadState {
         buttons: FALLBACK_BUTTONS
             .iter()
-            .filter(|(vk, _)| on(*vk) != 0.0)
+            .filter(|(scan_code, _)| on(*scan_code) != 0.0)
             .fold(0, |all, (_, bit)| all | bit),
-        left_trigger: on(b'Z'),
-        right_trigger: on(b'C'),
-        left_x: on(b'D') - on(b'A'),
-        left_y: on(b'W') - on(b'S'),
-        right_x: on(b'L') - on(b'J'),
-        right_y: on(b'I') - on(b'K'),
+        left_trigger: on(0x2C),       // Z
+        right_trigger: on(0x2E),      // C
+        left_x: on(0x20) - on(0x1E),  // D - A
+        left_y: on(0x11) - on(0x1F),  // W - S
+        right_x: on(0x26) - on(0x24), // L - J
+        right_y: on(0x17) - on(0x25), // I - K
     }
 }
 
@@ -1295,8 +1297,16 @@ mod tests {
     }
 
     fn key(virtual_key: u8) -> KeyState {
+        // The physical key that types this on a US layout.
+        let scan_code = match virtual_key {
+            b'W' => 0x11,
+            b'L' => 0x26,
+            b'C' => 0x2E,
+            0x0D => 0x1C,
+            _ => 0,
+        };
         KeyState {
-            scan_code: u32::from(virtual_key) + 0x100,
+            scan_code,
             virtual_key,
             ..Default::default()
         }
@@ -1507,6 +1517,26 @@ mod tests {
         release(r);
         // A keyboard reading is no gamepad reading.
         assert_eq!(current(hub, GAMEPAD_KIND, KEYBOARD), Err(READING_NOT_FOUND));
+    }
+
+    #[test]
+    fn the_stand_in_pad_reads_physical_keys_not_layout_letters() {
+        // AZERTY: Z and Q type 'z' and 'q', and sit where W and A are.
+        let held = |virtual_key: u8, scan_code: u32| KeyState {
+            scan_code,
+            virtual_key,
+            ..Default::default()
+        };
+        assert_eq!(
+            fallback(&[held(b'Z', 0x11), held(b'Q', 0x1E)]),
+            PadState {
+                left_x: -1.0,
+                left_y: 1.0,
+                ..Default::default()
+            }
+        );
+        // The key labelled W sits on the left trigger's physical key.
+        assert_eq!(fallback(&[held(b'W', 0x2C)]).left_trigger, 1.0);
     }
 
     #[test]

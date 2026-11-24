@@ -74,7 +74,9 @@ are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
 data under the cache folder.
 
 Input: XInput pads. With none connected the keyboard is a pad while the
-title's window has focus:
+title's window has focus. Keys are read by physical position, so an AZERTY
+keyboard plays Z Q S D (and A / E, W / C) where a QWERTY one has W A S D
+(and Q / E, Z / C):
 
 | Keys | Pad |
 |------|-----|
