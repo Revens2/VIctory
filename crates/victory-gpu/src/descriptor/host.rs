@@ -91,6 +91,13 @@ const DYNAMIC: u32 = 1 << 18;
 /// (a capped heap, NVIDIA): the title's slots keep their room first.
 const MIN_DYNAMIC: u32 = 1 << 16;
 
+/// The (title, dynamic) slots of a view heap capped at [`PORTABLE_VIEWS`]:
+/// the dynamic range keeps its full room and the title's slots give way.
+fn capped_split() -> (u32, u32) {
+    let extra = DYNAMIC.min(PORTABLE_VIEWS - MIN_DYNAMIC);
+    (PORTABLE_VIEWS - extra, extra)
+}
+
 impl HostHeap {
     pub(crate) fn new(sampler: bool, count: u32) -> Option<Self> {
         let host = host()?;
@@ -141,8 +148,22 @@ impl HostHeap {
                 Err(e) if count + MIN_DYNAMIC > PORTABLE_VIEWS => {
                     // shortcut: descriptors past the host's limit are left
                     // out; a title that reaches them needs remapping.
-                    tracing::warn!(error = %e, count, "host view heap capped at {PORTABLE_VIEWS}");
-                    (make(PORTABLE_VIEWS).ok()?, PORTABLE_VIEWS - MIN_DYNAMIC, MIN_DYNAMIC)
+                    // The title's heap alone does not fit, so the two ranges
+                    // compete: a world load drops thousands of draws in a row
+                    // on 2^16 dynamic slots (8192 and climbing before the
+                    // device went away), and every title slot left unmapped
+                    // is another table the draws must make afresh. The
+                    // dynamic range keeps its full room and the title's slots
+                    // give way.
+                    let (kept, extra) = capped_split();
+                    tracing::warn!(
+                        error = %e,
+                        count,
+                        kept,
+                        extra,
+                        "host view heap capped at {PORTABLE_VIEWS}"
+                    );
+                    (make(PORTABLE_VIEWS).ok()?, kept, extra)
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, count, sampler, "no host descriptor heap");
@@ -1359,6 +1380,16 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capped view heap keeps the full dynamic range: with only
+    /// `MIN_DYNAMIC` slots a world load ran the pool dry and dropped draws.
+    #[test]
+    fn capped_view_heap_keeps_its_full_dynamic_range() {
+        let (kept, extra) = capped_split();
+        assert_eq!(extra, DYNAMIC);
+        assert!(extra > MIN_DYNAMIC);
+        assert_eq!(kept + extra, PORTABLE_VIEWS);
+    }
 
     /// The world's 16-byte view of 0 elements removed the device.
     #[test]
